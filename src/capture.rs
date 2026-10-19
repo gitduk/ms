@@ -1,10 +1,12 @@
 use std::borrow::Cow;
+use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
 use crate::config::{self, Config, Pane, Window};
+use crate::init::CMD_OPTION;
 use crate::tmux::{self, Run};
 
 const SEP: char = '\x1f';
@@ -14,6 +16,7 @@ pub fn capture(session: &str, name: &str) -> Result<Config> {
         "#{window_index}",
         "#{window_name}",
         "#{window_layout}",
+        "#{pane_id}",
         "#{pane_pid}",
         "#{pane_current_path}",
     ]
@@ -30,16 +33,23 @@ pub fn capture(session: &str, name: &str) -> Result<Config> {
         .run()?;
 
     let home = config::home()?;
+    // The pane running this save would otherwise be captured as `ms save`.
+    let own_pane = env::var("TMUX_PANE").ok();
     let mut windows: Vec<Window> = Vec::new();
     let mut last_index = None;
     for line in out.lines() {
-        let mut f = line.splitn(5, SEP);
+        let mut f = line.splitn(6, SEP);
         let mut next = || f.next().context("unexpected tmux list-panes output");
-        let (index, wname, layout, pid, path) = (next()?, next()?, next()?, next()?, next()?);
+        let (index, wname, layout) = (next()?, next()?, next()?);
+        let (pane_id, pid, path) = (next()?, next()?, next()?);
 
         let pane = Pane {
             root: Some(tildify(Path::new(path), &home)),
-            cmd: pane_cmd(pid),
+            cmd: if own_pane.as_deref() == Some(pane_id) {
+                None
+            } else {
+                pane_cmd(pane_id, pid)
+            },
             enter: true,
         };
         match windows.last_mut() {
@@ -95,13 +105,30 @@ fn tildify(p: &Path, home: &Path) -> PathBuf {
     }
 }
 
-/// The pane's foreground command: the shell's first child, or the pane
-/// process itself when it isn't a shell. `None` for an idle shell.
-fn pane_cmd(pid: &str) -> Option<String> {
+/// The command line as typed, recorded by the `ms init` hook; without the
+/// hook, falls back to the foreground process's argv.
+fn pane_cmd(pane_id: &str, pid: &str) -> Option<String> {
+    tmux::cmd()
+        .args(["show-options", "-pqv", "-t", pane_id, CMD_OPTION])
+        .run()
+        .ok()
+        .filter(|typed| !typed.is_empty())
+        .or_else(|| proc_cmd(pid))
+}
+
+/// The shell's first child, or the pane process itself when it isn't a
+/// shell. `None` for an idle shell.
+fn proc_cmd(pid: &str) -> Option<String> {
     let args = cmdline(pid)?;
     let args = if is_shell(&args[0]) {
         let children = fs::read_to_string(format!("/proc/{pid}/task/{pid}/children")).ok()?;
-        cmdline(children.split_whitespace().next()?)?
+        let child = cmdline(children.split_whitespace().next()?)?;
+        // A forked subshell (a function, a pipeline) carries the shell's
+        // argv, not the command, so there's nothing useful to record.
+        if is_shell(&child[0]) {
+            return None;
+        }
+        child
     } else {
         args
     };

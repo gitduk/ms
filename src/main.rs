@@ -1,5 +1,6 @@
 mod capture;
 mod config;
+mod init;
 mod restore;
 mod tmux;
 
@@ -7,7 +8,7 @@ use std::fs;
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
-use clap::{CommandFactory, Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::{ArgValueCandidates, CompleteEnv, CompletionCandidate};
 
 use crate::config::Config;
@@ -55,6 +56,14 @@ enum Cmd {
         #[arg(add = ArgValueCandidates::new(config_candidates))]
         name: String,
     },
+    /// Print shell setup: completions plus a hook that lets `save` see
+    /// the exact command line typed in each pane
+    Init { shell: Shell },
+}
+
+#[derive(Clone, ValueEnum)]
+enum Shell {
+    Zsh,
 }
 
 fn config_candidates() -> Vec<CompletionCandidate> {
@@ -89,6 +98,7 @@ fn main() -> Result<()> {
             detached,
         } => restore::start(&Config::load(&name)?, fresh, detached),
         Cmd::Ls => ls(),
+        Cmd::Init { shell: Shell::Zsh } => init::zsh(),
         Cmd::Edit { name } => edit(&name),
         Cmd::Kill { name } => {
             let cfg = Config::load(&name)?;
