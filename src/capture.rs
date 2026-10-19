@@ -9,7 +9,9 @@ use crate::config::{self, Config, Pane, Window};
 use crate::init::CMD_OPTION;
 use crate::tmux::{self, Run};
 
-const SEP: char = '\x1f';
+// Printable on purpose: some tmux builds (next-3.4) escape control
+// characters in -F output, so `\x1f` would arrive as the text `\037`.
+const SEP: &str = "|ms|";
 
 pub fn capture(session: &str, name: &str) -> Result<Config> {
     let format = [
@@ -20,7 +22,7 @@ pub fn capture(session: &str, name: &str) -> Result<Config> {
         "#{pane_pid}",
         "#{pane_current_path}",
     ]
-    .join(&SEP.to_string());
+    .join(SEP);
     let out = tmux::cmd()
         .args([
             "list-panes",
