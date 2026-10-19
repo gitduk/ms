@@ -26,7 +26,8 @@ struct Cli {
 enum Cmd {
     /// Capture a running session into ~/.config/ms/<name>.toml
     Save {
-        name: String,
+        /// Config name [default: the captured session's name]
+        name: Option<String>,
         /// Session to capture [default: the current one]
         #[arg(short, long, add = ArgValueCandidates::new(session_candidates))]
         session: Option<String>,
@@ -96,7 +97,7 @@ fn main() -> Result<()> {
             session,
             force,
             edit,
-        } => save(&name, session, force, edit),
+        } => save(name, session, force, edit),
         Cmd::Start {
             name,
             fresh,
@@ -115,7 +116,12 @@ fn main() -> Result<()> {
     }
 }
 
-fn save(name: &str, session: Option<String>, force: bool, edit: bool) -> Result<()> {
+fn save(name: Option<String>, session: Option<String>, force: bool, edit: bool) -> Result<()> {
+    let name = match name {
+        Some(n) => n,
+        None => target_session(session.clone())?,
+    };
+    let name = name.as_str();
     let path = config::path_of(name)?;
     config::validate_session(name)?;
     let dir = config::dir()?;
@@ -133,11 +139,7 @@ fn save(name: &str, session: Option<String>, force: bool, edit: bool) -> Result<
             path.display()
         );
     }
-    let session = match session {
-        Some(s) => s,
-        None if tmux::inside() => tmux::current_session()?,
-        None => bail!("not inside tmux; pass --session"),
-    };
+    let session = target_session(session)?;
     let cfg = capture::capture(&session, name)?;
     fs::create_dir_all(&dir).with_context(|| format!("cannot create {}", dir.display()))?;
     let text = toml::to_string_pretty(&cfg)?;
@@ -148,6 +150,14 @@ fn save(name: &str, session: Option<String>, force: bool, edit: bool) -> Result<
     fs::write(&path, text).with_context(|| format!("cannot write {}", path.display()))?;
     println!("saved {session:?} to {}", path.display());
     Ok(())
+}
+
+fn target_session(session: Option<String>) -> Result<String> {
+    match session {
+        Some(s) => Ok(s),
+        None if tmux::inside() => tmux::current_session(),
+        None => bail!("not inside tmux; pass --session"),
+    }
 }
 
 /// Opens `draft`; it replaces `path` only if the editor saved it and it
