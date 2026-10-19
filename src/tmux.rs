@@ -15,11 +15,16 @@ pub trait Run {
 
 impl Run for Command {
     fn run(&mut self) -> Result<String> {
+        let prog = self.get_program().to_string_lossy().into_owned();
         let out = self
             .output()
-            .with_context(|| format!("failed to spawn {self:?}"))?;
+            .with_context(|| format!("failed to run {prog}"))?;
         if !out.status.success() {
-            bail!("{self:?}: {}", String::from_utf8_lossy(&out.stderr).trim());
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            match stderr.trim() {
+                "" => bail!("{prog} exited with {}", out.status),
+                msg => bail!("{prog}: {msg}"),
+            }
         }
         Ok(String::from_utf8_lossy(&out.stdout).trim_end().to_owned())
     }
