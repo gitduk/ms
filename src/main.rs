@@ -118,6 +118,15 @@ fn main() -> Result<()> {
 fn save(name: &str, session: Option<String>, force: bool, edit: bool) -> Result<()> {
     let path = config::path_of(name)?;
     config::validate_session(name)?;
+    let dir = config::dir()?;
+    let draft = dir.join(format!(".{name}.save.toml"));
+    if edit && draft.exists() {
+        println!(
+            "resuming the draft from an earlier save (delete it for a fresh capture): {}",
+            draft.display()
+        );
+        return review(&path, &draft, true);
+    }
     if path.exists() && !force && !edit {
         bail!(
             "{} exists (it may hold hand edits); pass --force to overwrite, or -e to review first",
@@ -130,33 +139,30 @@ fn save(name: &str, session: Option<String>, force: bool, edit: bool) -> Result<
         None => bail!("not inside tmux; pass --session"),
     };
     let cfg = capture::capture(&session, name)?;
-    let dir = config::dir()?;
     fs::create_dir_all(&dir).with_context(|| format!("cannot create {}", dir.display()))?;
     let text = toml::to_string_pretty(&cfg)?;
     if edit {
-        return save_reviewed(&path, &dir.join(format!(".{name}.save.toml")), &text);
+        fs::write(&draft, text).with_context(|| format!("cannot write {}", draft.display()))?;
+        return review(&path, &draft, false);
     }
     fs::write(&path, text).with_context(|| format!("cannot write {}", path.display()))?;
     println!("saved {session:?} to {}", path.display());
     Ok(())
 }
 
-/// Writes `text` to a draft and opens it; the draft replaces `path` only if
-/// the editor saved it and it still parses.
-fn save_reviewed(path: &Path, draft: &Path, text: &str) -> Result<()> {
-    if draft.exists() {
-        bail!(
-            "a draft from an earlier save is still at {}; move or delete it first",
-            draft.display()
-        );
-    }
-    fs::write(draft, text).with_context(|| format!("cannot write {}", draft.display()))?;
+/// Opens `draft`; it replaces `path` only if the editor saved it and it
+/// still parses. A resumed draft holds earlier edits, so it's kept on abort.
+fn review(path: &Path, draft: &Path, resumed: bool) -> Result<()> {
     let mtime = |p: &Path| fs::metadata(p).and_then(|m| m.modified()).ok();
     let before = mtime(draft);
     let saved = open_editor(draft)? && mtime(draft) != before;
     if !saved {
-        fs::remove_file(draft).with_context(|| format!("cannot remove {}", draft.display()))?;
-        println!("not saved; {} left unchanged", path.display());
+        if resumed {
+            println!("not saved; draft kept at {}", draft.display());
+        } else {
+            fs::remove_file(draft).with_context(|| format!("cannot remove {}", draft.display()))?;
+            println!("not saved; {} left unchanged", path.display());
+        }
         return Ok(());
     }
     Config::load_path(draft).with_context(|| format!("draft kept at {}", draft.display()))?;
