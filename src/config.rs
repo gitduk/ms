@@ -99,6 +99,25 @@ pub fn dir() -> Result<PathBuf> {
     }
 }
 
+/// Config names (file stems) in the config dir, sorted; empty if it's missing.
+pub fn names() -> Vec<String> {
+    let Ok(entries) = dir().and_then(|d| Ok(fs::read_dir(d)?)) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = entries
+        .filter_map(|e| {
+            e.ok()?
+                .file_name()
+                .into_string()
+                .ok()?
+                .strip_suffix(".toml")
+                .map(str::to_owned)
+        })
+        .collect();
+    names.sort();
+    names
+}
+
 pub fn path_of(name: &str) -> Result<PathBuf> {
     ensure!(
         !name.is_empty() && !name.starts_with('.') && !name.contains('/'),

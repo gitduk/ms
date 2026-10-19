@@ -7,7 +7,8 @@ use std::fs;
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete::{ArgValueCandidates, CompleteEnv, CompletionCandidate};
 
 use crate::config::Config;
 use crate::tmux::Run;
@@ -25,7 +26,7 @@ enum Cmd {
     Save {
         name: String,
         /// Session to capture [default: the current one]
-        #[arg(short, long)]
+        #[arg(short, long, add = ArgValueCandidates::new(session_candidates))]
         session: Option<String>,
         /// Overwrite an existing config
         #[arg(short, long)]
@@ -33,6 +34,7 @@ enum Cmd {
     },
     /// Start a session from its config (attach if already running)
     Start {
+        #[arg(add = ArgValueCandidates::new(config_candidates))]
         name: String,
         /// Kill the running session and rebuild it
         #[arg(long)]
@@ -44,12 +46,37 @@ enum Cmd {
     /// List configs; `*` marks running sessions
     Ls,
     /// Open a config in $EDITOR
-    Edit { name: String },
+    Edit {
+        #[arg(add = ArgValueCandidates::new(config_candidates))]
+        name: String,
+    },
     /// Kill a config's session
-    Kill { name: String },
+    Kill {
+        #[arg(add = ArgValueCandidates::new(config_candidates))]
+        name: String,
+    },
+}
+
+fn config_candidates() -> Vec<CompletionCandidate> {
+    config::names()
+        .into_iter()
+        .map(CompletionCandidate::new)
+        .collect()
+}
+
+fn session_candidates() -> Vec<CompletionCandidate> {
+    tmux::running_sessions()
+        .into_iter()
+        .map(CompletionCandidate::new)
+        .collect()
 }
 
 fn main() -> Result<()> {
+    // Call back through PATH, not this exe's path: a cached script would
+    // otherwise point at a versioned install dir that upgrades remove.
+    CompleteEnv::with_factory(Cli::command)
+        .completer("ms")
+        .complete();
     match Cli::parse().command {
         Cmd::Save {
             name,
@@ -97,23 +124,8 @@ fn save(name: &str, session: Option<String>, force: bool) -> Result<()> {
 }
 
 fn ls() -> Result<()> {
-    let dir = config::dir()?;
-    let Ok(entries) = fs::read_dir(&dir) else {
-        return Ok(());
-    };
-    let mut names: Vec<String> = entries
-        .filter_map(|e| {
-            e.ok()?
-                .file_name()
-                .into_string()
-                .ok()?
-                .strip_suffix(".toml")
-                .map(str::to_owned)
-        })
-        .collect();
-    names.sort();
     let running = tmux::running_sessions();
-    for name in names {
+    for name in config::names() {
         match Config::load(&name) {
             Ok(cfg) => {
                 let mark = if running.contains(&cfg.session) {
