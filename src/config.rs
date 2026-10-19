@@ -49,9 +49,12 @@ fn is_true(b: &bool) -> bool {
 
 impl Config {
     pub fn load(name: &str) -> Result<Self> {
-        let path = path_of(name)?;
+        Self::load_path(&path_of(name)?)
+    }
+
+    pub fn load_path(path: &Path) -> Result<Self> {
         let text =
-            fs::read_to_string(&path).with_context(|| format!("cannot read {}", path.display()))?;
+            fs::read_to_string(path).with_context(|| format!("cannot read {}", path.display()))?;
         let cfg: Self =
             toml::from_str(&text).with_context(|| format!("invalid config {}", path.display()))?;
         validate_session(&cfg.session)?;
@@ -113,6 +116,8 @@ pub fn names() -> Vec<String> {
                 .strip_suffix(".toml")
                 .map(str::to_owned)
         })
+        // Hidden files are save drafts, and path_of rejects such names anyway.
+        .filter(|n| !n.starts_with('.'))
         .collect();
     names.sort();
     names

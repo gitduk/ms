@@ -5,6 +5,7 @@ mod restore;
 mod tmux;
 
 use std::fs;
+use std::path::Path;
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
@@ -32,6 +33,9 @@ enum Cmd {
         /// Overwrite an existing config
         #[arg(short, long)]
         force: bool,
+        /// Review in $EDITOR first; quitting without saving keeps the old config
+        #[arg(short, long)]
+        edit: bool,
     },
     /// Start a session from its config (attach if already running)
     Start {
@@ -91,7 +95,8 @@ fn main() -> Result<()> {
             name,
             session,
             force,
-        } => save(&name, session, force),
+            edit,
+        } => save(&name, session, force, edit),
         Cmd::Start {
             name,
             fresh,
@@ -110,12 +115,12 @@ fn main() -> Result<()> {
     }
 }
 
-fn save(name: &str, session: Option<String>, force: bool) -> Result<()> {
+fn save(name: &str, session: Option<String>, force: bool, edit: bool) -> Result<()> {
     let path = config::path_of(name)?;
     config::validate_session(name)?;
-    if path.exists() && !force {
+    if path.exists() && !force && !edit {
         bail!(
-            "{} exists (it may hold hand edits); pass --force to overwrite",
+            "{} exists (it may hold hand edits); pass --force to overwrite, or -e to review first",
             path.display()
         );
     }
@@ -127,10 +132,48 @@ fn save(name: &str, session: Option<String>, force: bool) -> Result<()> {
     let cfg = capture::capture(&session, name)?;
     let dir = config::dir()?;
     fs::create_dir_all(&dir).with_context(|| format!("cannot create {}", dir.display()))?;
-    fs::write(&path, toml::to_string_pretty(&cfg)?)
-        .with_context(|| format!("cannot write {}", path.display()))?;
+    let text = toml::to_string_pretty(&cfg)?;
+    if edit {
+        return save_reviewed(&path, &dir.join(format!(".{name}.save.toml")), &text);
+    }
+    fs::write(&path, text).with_context(|| format!("cannot write {}", path.display()))?;
     println!("saved {session:?} to {}", path.display());
     Ok(())
+}
+
+/// Writes `text` to a draft and opens it; the draft replaces `path` only if
+/// the editor saved it and it still parses.
+fn save_reviewed(path: &Path, draft: &Path, text: &str) -> Result<()> {
+    if draft.exists() {
+        bail!(
+            "a draft from an earlier save is still at {}; move or delete it first",
+            draft.display()
+        );
+    }
+    fs::write(draft, text).with_context(|| format!("cannot write {}", draft.display()))?;
+    let mtime = |p: &Path| fs::metadata(p).and_then(|m| m.modified()).ok();
+    let before = mtime(draft);
+    let saved = open_editor(draft)? && mtime(draft) != before;
+    if !saved {
+        fs::remove_file(draft).with_context(|| format!("cannot remove {}", draft.display()))?;
+        println!("not saved; {} left unchanged", path.display());
+        return Ok(());
+    }
+    Config::load_path(draft).with_context(|| format!("draft kept at {}", draft.display()))?;
+    fs::rename(draft, path).with_context(|| format!("cannot write {}", path.display()))?;
+    println!("saved to {}", path.display());
+    Ok(())
+}
+
+/// Runs $EDITOR on `path`; returns whether it exited successfully.
+fn open_editor(path: &Path) -> Result<bool> {
+    // Through sh so an $EDITOR with arguments (`code -w`) works.
+    let status = Command::new("sh")
+        .args(["-c", r#"exec ${EDITOR:-vi} "$1""#, "sh"])
+        .arg(path)
+        .status()
+        .context("failed to launch editor")?;
+    Ok(status.success())
 }
 
 fn ls() -> Result<()> {
@@ -158,13 +201,7 @@ fn edit(name: &str) -> Result<()> {
     let path = config::path_of(name)?;
     let dir = config::dir()?;
     fs::create_dir_all(&dir).with_context(|| format!("cannot create {}", dir.display()))?;
-    // Through sh so an $EDITOR with arguments (`code -w`) works.
-    let status = Command::new("sh")
-        .args(["-c", r#"exec ${EDITOR:-vi} "$1""#, "sh"])
-        .arg(&path)
-        .status()
-        .context("failed to launch editor")?;
-    if status.success() && path.exists() {
+    if open_editor(&path)? && path.exists() {
         Config::load(name)?;
     }
     Ok(())
