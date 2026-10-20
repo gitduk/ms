@@ -6,21 +6,19 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 
 use crate::config::{self, Config, Pane, Window};
-use crate::init::CMD_OPTION;
 use crate::tmux::{self, Run};
 
-// Printable on purpose: some tmux builds (next-3.4) escape control
-// characters in -F output, so `\x1f` would arrive as the text `\037`.
-const SEP: &str = "|ms|";
+// Free-text fields go through `tmux::raw`, which encodes `|` away.
+const SEP: &str = "|";
 
 pub fn capture(session: &str, name: &str) -> Result<Config> {
     let format = [
-        "#{window_index}",
-        "#{window_name}",
-        "#{window_layout}",
-        "#{pane_id}",
-        "#{pane_pid}",
-        "#{pane_current_path}",
+        "#{window_index}".into(),
+        tmux::raw("window_name"),
+        "#{window_layout}".into(),
+        "#{pane_id}".into(),
+        "#{pane_pid}".into(),
+        tmux::raw("pane_current_path"),
     ]
     .join(SEP);
     let out = tmux::cmd()
@@ -46,11 +44,11 @@ pub fn capture(session: &str, name: &str) -> Result<Config> {
         let (pane_id, pid, path) = (next()?, next()?, next()?);
 
         let pane = Pane {
-            root: Some(tildify(Path::new(path), &home)),
+            root: Some(tildify(Path::new(&tmux::unvis(path)), &home)),
             cmd: if own_pane.as_deref() == Some(pane_id) {
                 None
             } else {
-                pane_cmd(pane_id, pid)
+                proc_cmd(pid)
             },
             enter: true,
         };
@@ -59,7 +57,8 @@ pub fn capture(session: &str, name: &str) -> Result<Config> {
             _ => {
                 last_index = Some(index);
                 windows.push(Window {
-                    name: wname.to_owned(),
+                    // Window names are also stored vis-encoded.
+                    name: tmux::unvis(&tmux::unvis(wname)),
                     root: None,
                     layout: Some(layout.to_owned()),
                     panes: vec![pane],
@@ -105,17 +104,6 @@ fn tildify(p: &Path, home: &Path) -> PathBuf {
         Ok(rest) => Path::new("~").join(rest),
         Err(_) => p.to_path_buf(),
     }
-}
-
-/// The command line as typed, recorded by the `ms init` hook; without the
-/// hook, falls back to the foreground process's argv.
-fn pane_cmd(pane_id: &str, pid: &str) -> Option<String> {
-    tmux::cmd()
-        .args(["show-options", "-pqv", "-t", pane_id, CMD_OPTION])
-        .run()
-        .ok()
-        .filter(|typed| !typed.is_empty())
-        .or_else(|| proc_cmd(pid))
 }
 
 /// The shell's first child, or the pane process itself when it isn't a

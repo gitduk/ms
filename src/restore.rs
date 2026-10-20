@@ -62,7 +62,7 @@ fn build(cfg: &Config) -> Result<()> {
     for (i, (w, roots)) in plan.into_iter().enumerate() {
         let mut create = tmux::cmd();
         if i == 0 {
-            create.args(["new-session", "-d", "-s", &cfg.session]);
+            create.args(["new-session", "-d", "-s", &tmux::literal(&cfg.session)]);
             if let Some((cols, rows)) = terminal_size() {
                 create.args(["-x", &cols.to_string(), "-y", &rows.to_string()]);
             }
@@ -70,8 +70,13 @@ fn build(cfg: &Config) -> Result<()> {
             create.args(["new-window", "-d", "-t", &format!("{target}:")]);
         }
         let first = create
-            .args(["-n", &w.name, "-P", "-F", "#{pane_id}", "-c"])
-            .arg(&roots[0])
+            .args(["-P", "-F", "#{pane_id}", "-c"])
+            .arg(tmux::literal(&roots[0]))
+            .run()?;
+        // Not `-n`: 3.4 stores that name raw but rename-window's vis-encoded,
+        // and capture can only decode one form.
+        tmux::cmd()
+            .args(["rename-window", "-t", &first, &tmux::literal(&w.name)])
             .run()?;
 
         // Split from the newest pane: tmux inserts after the target, so this
@@ -89,7 +94,7 @@ fn build(cfg: &Config) -> Result<()> {
                     "#{pane_id}",
                     "-c",
                 ])
-                .arg(root)
+                .arg(tmux::literal(root))
                 .run()?;
             ids.push(id);
             // Rebalance after each split; repeatedly halving one pane runs out of room.

@@ -61,8 +61,7 @@ enum Cmd {
         #[arg(add = ArgValueCandidates::new(config_candidates))]
         name: String,
     },
-    /// Print shell setup: completions plus a hook that lets `save` see
-    /// the exact command line typed in each pane
+    /// Print shell completion setup
     Init { shell: Shell },
 }
 
@@ -117,9 +116,12 @@ fn main() -> Result<()> {
 }
 
 fn save(name: Option<String>, session: Option<String>, force: bool, edit: bool) -> Result<()> {
-    let name = match name {
-        Some(n) => n,
-        None => target_session(session.clone())?,
+    let (name, session) = match name {
+        Some(n) => (n, session),
+        None => {
+            let s = target_session(session)?;
+            (s.clone(), Some(s))
+        }
     };
     let name = name.as_str();
     let path = config::path_of(name)?;
