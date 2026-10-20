@@ -153,7 +153,17 @@ fn save(name: Option<String>, session: Option<String>, force: bool, edit: bool) 
         );
     }
     let session = target_session(session)?;
-    let cfg = capture::capture(&session, name)?;
+    let mut cfg = capture::capture(&session, name)?;
+    // Hooks can't be captured from tmux; keep the ones already written.
+    if path.exists() {
+        match Config::load_path(&path) {
+            Ok(old) => {
+                cfg.before = old.before;
+                cfg.after = old.after;
+            }
+            Err(e) => eprintln!("warning: hooks not kept, old config unreadable: {e:#}"),
+        }
+    }
     fs::create_dir_all(&dir).with_context(|| format!("cannot create {}", dir.display()))?;
     let text = toml::to_string_pretty(&cfg)?;
     if edit {

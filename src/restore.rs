@@ -1,7 +1,7 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use anyhow::{Result, bail, ensure};
+use anyhow::{Context, Result, bail, ensure};
 
 use crate::config::{Config, Pane};
 use crate::tmux::{self, Run};
@@ -24,7 +24,15 @@ pub fn start(cfg: &Config, fresh: bool, detached: bool) -> Result<()> {
         }
         tmux::cmd().args(["kill-session", "-t", &target]).run()?;
     }
+    let root = cfg.resolve_root(None, None)?;
+    if let Some(script) = &cfg.before {
+        hook("before", script, &root)?;
+    }
     build(cfg)?;
+    if let Some(script) = &cfg.after {
+        hook("after", script, &root)
+            .with_context(|| format!("session {:?} was built", cfg.session))?;
+    }
     if detached {
         Ok(())
     } else {
@@ -40,11 +48,11 @@ fn build(cfg: &Config) -> Result<()> {
     let mut plan = Vec::with_capacity(cfg.windows.len());
     for w in &cfg.windows {
         let roots = if w.panes.is_empty() {
-            vec![cfg.resolve_root(w, None)?]
+            vec![cfg.resolve_root(Some(w), None)?]
         } else {
             w.panes
                 .iter()
-                .map(|p| cfg.resolve_root(w, Some(p)))
+                .map(|p| cfg.resolve_root(Some(w), Some(p)))
                 .collect::<Result<Vec<PathBuf>>>()?
         };
         for r in &roots {
@@ -132,6 +140,18 @@ fn build(cfg: &Config) -> Result<()> {
     tmux::cmd()
         .args(["select-window", "-t", &format!("{target}:^")])
         .run()?;
+    Ok(())
+}
+
+/// `-e` stops a multi-line script at its first failing command.
+fn hook(name: &str, script: &str, dir: &Path) -> Result<()> {
+    ensure!(dir.is_dir(), "{name}: {} is not a directory", dir.display());
+    let status = Command::new("sh")
+        .args(["-ec", script])
+        .current_dir(dir)
+        .status()
+        .with_context(|| format!("failed to run {name}"))?;
+    ensure!(status.success(), "{name} exited with {status}");
     Ok(())
 }
 

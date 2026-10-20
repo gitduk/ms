@@ -11,6 +11,12 @@ pub struct Config {
     pub session: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub root: Option<PathBuf>,
+    /// Shell script run in the session root before a new session is built.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before: Option<String>,
+    /// Shell script run in the session root after a new session is built.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after: Option<String>,
     pub windows: Vec<Window>,
 }
 
@@ -68,11 +74,11 @@ impl Config {
 
     /// Each level's root is joined onto its parent's, so relative paths nest
     /// and absolute (or `~`) paths override.
-    pub fn resolve_root(&self, window: &Window, pane: Option<&Pane>) -> Result<PathBuf> {
+    pub fn resolve_root(&self, window: Option<&Window>, pane: Option<&Pane>) -> Result<PathBuf> {
         let home = home()?;
         let levels = [
             self.root.as_deref(),
-            window.root.as_deref(),
+            window.and_then(|w| w.root.as_deref()),
             pane.and_then(|p| p.root.as_deref()),
         ];
         Ok(levels

@@ -81,6 +81,8 @@ pub fn capture(session: &str, name: &str) -> Result<Config> {
     Ok(Config {
         session: name.to_owned(),
         root,
+        before: None,
+        after: None,
         windows,
     })
 }
