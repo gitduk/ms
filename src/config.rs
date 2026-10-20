@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
+use toml_edit::{DocumentMut, Item, Value};
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -70,6 +71,46 @@ impl Config {
             path.display()
         );
         Ok(cfg)
+    }
+
+    pub fn to_toml(&self) -> Result<String> {
+        let text = self.to_doc()?.to_string();
+        toml::from_str::<Self>(&text).context("reformatted config doesn't parse")?;
+        Ok(text)
+    }
+
+    /// Writes each window's panes one inline table per line, layout last,
+    /// so a window's pane count reads at a glance.
+    pub fn to_doc(&self) -> Result<DocumentMut> {
+        let mut doc: DocumentMut = toml::to_string_pretty(self)?.parse()?;
+        if let Some(windows) = doc
+            .get_mut("windows")
+            .and_then(Item::as_array_of_tables_mut)
+        {
+            for w in windows.iter_mut() {
+                let layout = w.remove("layout");
+                if let Some(panes) = w.remove("panes") {
+                    let panes = match panes.into_array_of_tables() {
+                        Ok(aot) => {
+                            let mut panes = aot.into_array();
+                            for p in panes.iter_mut() {
+                                p.decor_mut().set_prefix("\n  ");
+                                p.decor_mut().set_suffix("");
+                            }
+                            panes.set_trailing_comma(true);
+                            panes.set_trailing("\n");
+                            Item::Value(Value::Array(panes))
+                        }
+                        Err(item) => item,
+                    };
+                    w.insert("panes", panes);
+                }
+                if let Some(layout) = layout {
+                    w.insert("layout", layout);
+                }
+            }
+        }
+        Ok(doc)
     }
 
     /// Each level's root is joined onto its parent's, so relative paths nest

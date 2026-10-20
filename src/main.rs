@@ -165,7 +165,7 @@ fn save(name: Option<String>, session: Option<String>, force: bool, edit: bool) 
         }
     }
     fs::create_dir_all(&dir).with_context(|| format!("cannot create {}", dir.display()))?;
-    let text = toml::to_string_pretty(&cfg)?;
+    let text = cfg.to_toml()?;
     if edit {
         fs::write(&draft, text).with_context(|| format!("cannot write {}", draft.display()))?;
         return review(&path, &draft, false);
