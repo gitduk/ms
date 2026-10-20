@@ -52,8 +52,9 @@ enum Cmd {
     },
     /// Start a session from its config (attach if already running)
     Start {
+        /// Config name [default: the current session's name]
         #[arg(add = ArgValueCandidates::new(config_candidates))]
-        name: String,
+        name: Option<String>,
         /// Kill the running session and rebuild it
         #[arg(long)]
         fresh: bool,
@@ -71,8 +72,9 @@ enum Cmd {
     },
     /// Open a config in $EDITOR
     Edit {
+        /// Config name [default: the current session's name]
         #[arg(add = ArgValueCandidates::new(config_candidates))]
-        name: String,
+        name: Option<String>,
     },
     /// Delete a config; its running session is left alone
     Rm {
@@ -125,11 +127,11 @@ fn main() -> Result<()> {
             name,
             fresh,
             detached,
-        } => restore::start(&Config::load(&name)?, fresh, detached),
+        } => restore::start(&Config::load(&config_name(name, None)?)?, fresh, detached),
         Cmd::Ls => ls(),
         Cmd::View { name } => view::print(&Config::load(&config_name(name, None)?)?),
         Cmd::Init { shell: Shell::Zsh } => init::zsh(),
-        Cmd::Edit { name } => edit(&name),
+        Cmd::Edit { name } => edit(&config_name(name, None)?),
         Cmd::Rm { name } => {
             let path = config::path_of(&name)?;
             fs::remove_file(&path).with_context(|| format!("cannot remove {}", path.display()))?;
