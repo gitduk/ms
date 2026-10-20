@@ -1,6 +1,6 @@
 [package]
 name = "ms"
-version = "0.3.0"
+version = "0.3.1"
 repository = "https://github.com/gitduk/ms"
 edition = "2024"
 
