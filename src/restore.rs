@@ -71,6 +71,8 @@ fn build(cfg: &Config) -> Result<()> {
         let mut create = tmux::cmd();
         if i == 0 {
             create.args(["new-session", "-d", "-s", &tmux::literal(&cfg.session)]);
+            // Without it a detached session starts at tmux's 80x24 default,
+            // and presets like main-vertical squash the rest.
             if let Some((cols, rows)) = terminal_size() {
                 create.args(["-x", &cols.to_string(), "-y", &rows.to_string()]);
             }
@@ -155,9 +157,8 @@ fn hook(name: &str, script: &str, dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// The terminal we'll attach from. Without it a detached session starts at
-/// tmux's 80x24 default, and presets like main-vertical squash the rest.
-fn terminal_size() -> Option<(u16, u16)> {
+/// Columns and rows of the terminal on stdin.
+pub fn terminal_size() -> Option<(u16, u16)> {
     let out = Command::new("stty")
         .arg("size")
         .stdin(Stdio::inherit())

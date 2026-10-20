@@ -3,6 +3,7 @@ mod config;
 mod init;
 mod restore;
 mod tmux;
+mod view;
 
 use std::fs;
 use std::path::Path;
@@ -13,7 +14,7 @@ use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::{ArgValueCandidates, CompleteEnv, CompletionCandidate};
 use toml_edit::DocumentMut;
 
-use crate::config::Config;
+use crate::config::{Config, Window};
 use crate::tmux::Run;
 
 #[derive(Parser)]
@@ -62,6 +63,12 @@ enum Cmd {
     },
     /// List configs; `*` marks running sessions
     Ls,
+    /// Preview a config's windows as their pane layouts
+    View {
+        /// Config name [default: the current session's name]
+        #[arg(add = ArgValueCandidates::new(config_candidates))]
+        name: Option<String>,
+    },
     /// Open a config in $EDITOR
     Edit {
         #[arg(add = ArgValueCandidates::new(config_candidates))]
@@ -120,6 +127,7 @@ fn main() -> Result<()> {
             detached,
         } => restore::start(&Config::load(&name)?, fresh, detached),
         Cmd::Ls => ls(),
+        Cmd::View { name } => view::print(&Config::load(&config_name(name, None)?)?),
         Cmd::Init { shell: Shell::Zsh } => init::zsh(),
         Cmd::Edit { name } => edit(&name),
         Cmd::Rm { name } => {
@@ -228,7 +236,7 @@ fn target_session(session: Option<String>) -> Result<String> {
     match session {
         Some(s) => Ok(s),
         None if tmux::inside() => tmux::current_session(),
-        None => bail!("not inside tmux; pass --session"),
+        None => bail!("not inside tmux; name the config or session explicitly"),
     }
 }
 
@@ -266,19 +274,43 @@ fn open_editor(path: &Path) -> Result<bool> {
 
 fn ls() -> Result<()> {
     let running = tmux::running_sessions();
-    for name in config::names() {
-        match Config::load(&name) {
+    let configs: Vec<_> = config::names()
+        .into_iter()
+        .map(|n| {
+            let cfg = Config::load(&n);
+            (n, cfg)
+        })
+        .collect();
+    let width = configs
+        .iter()
+        .map(|(n, _)| n.chars().count())
+        .max()
+        .unwrap_or(0);
+    let windows = |cfg: &Config| view::count(cfg.windows.len(), "window");
+    let wwidth = configs
+        .iter()
+        .filter_map(|(_, c)| Some(windows(c.as_ref().ok()?).len()))
+        .max()
+        .unwrap_or(0);
+    for (name, cfg) in configs {
+        match cfg {
             Ok(cfg) => {
                 let mark = if running.contains(&cfg.session) {
                     '*'
                 } else {
                     ' '
                 };
-                println!("{mark} {name}");
+                let panes = cfg.windows.iter().map(Window::pane_count).sum();
+                println!(
+                    "{mark} {name:<width$}  {:<wwidth$} · {}",
+                    windows(&cfg),
+                    view::count(panes, "pane")
+                );
             }
             Err(e) => {
                 let cause = e.root_cause().to_string();
-                println!("! {name}  ({})", cause.lines().next().unwrap_or_default());
+                let cause = cause.lines().next().unwrap_or_default();
+                println!("! {name:<width$}  ({cause})");
             }
         }
     }

@@ -44,7 +44,7 @@ pub fn capture(session: &str, name: &str) -> Result<Config> {
         let (pane_id, pid, path) = (next()?, next()?, next()?);
 
         let pane = Pane {
-            root: Some(tildify(Path::new(&tmux::unvis(path)), &home)),
+            root: Some(config::tildify(Path::new(&tmux::unvis(path)), &home)),
             cmd: if own_pane.as_deref() == Some(pane_id) {
                 None
             } else {
@@ -98,14 +98,6 @@ fn hoist<'a>(children: impl IntoIterator<Item = &'a mut Option<PathBuf>>) -> Opt
         **r = None;
     }
     Some(first)
-}
-
-fn tildify(p: &Path, home: &Path) -> PathBuf {
-    match p.strip_prefix(home) {
-        Ok(rest) if rest.as_os_str().is_empty() => PathBuf::from("~"),
-        Ok(rest) => Path::new("~").join(rest),
-        Err(_) => p.to_path_buf(),
-    }
 }
 
 /// The shell's first child, or the pane process itself when it isn't a

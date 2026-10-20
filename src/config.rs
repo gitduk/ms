@@ -34,6 +34,13 @@ pub struct Window {
     pub panes: Vec<Pane>,
 }
 
+impl Window {
+    /// A window without `panes` still opens one shell.
+    pub fn pane_count(&self) -> usize {
+        self.panes.len().max(1)
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Pane {
@@ -142,6 +149,14 @@ pub fn home() -> Result<PathBuf> {
 fn expand_tilde(p: &Path, home: &Path) -> PathBuf {
     match p.strip_prefix("~") {
         Ok(rest) => home.join(rest),
+        Err(_) => p.to_path_buf(),
+    }
+}
+
+pub fn tildify(p: &Path, home: &Path) -> PathBuf {
+    match p.strip_prefix(home) {
+        Ok(rest) if rest.as_os_str().is_empty() => PathBuf::from("~"),
+        Ok(rest) => Path::new("~").join(rest),
         Err(_) => p.to_path_buf(),
     }
 }
