@@ -48,7 +48,7 @@ pub fn capture(session: &str, name: &str) -> Result<Config> {
             cmd: if own_pane.as_deref() == Some(pane_id) {
                 None
             } else {
-                proc_cmd(pid)
+                proc_cmd(pid, &home)
             },
             enter: true,
         };
@@ -108,7 +108,7 @@ fn tildify(p: &Path, home: &Path) -> PathBuf {
 
 /// The shell's first child, or the pane process itself when it isn't a
 /// shell. `None` for an idle shell.
-fn proc_cmd(pid: &str) -> Option<String> {
+fn proc_cmd(pid: &str, home: &Path) -> Option<String> {
     let args = cmdline(pid)?;
     let args = if is_shell(&args[0]) {
         let children = fs::read_to_string(format!("/proc/{pid}/task/{pid}/children")).ok()?;
@@ -122,7 +122,8 @@ fn proc_cmd(pid: &str) -> Option<String> {
     } else {
         args
     };
-    Some(args.iter().map(|a| quote(a)).collect::<Vec<_>>().join(" "))
+    let words: Vec<_> = args.iter().map(|a| shell_word(a, home)).collect();
+    Some(words.join(" "))
 }
 
 fn cmdline(pid: &str) -> Option<Vec<String>> {
@@ -145,6 +146,15 @@ fn is_shell(argv0: &str) -> bool {
         .unwrap_or(argv0)
         .trim_start_matches('-');
     matches!(base, "sh" | "bash" | "zsh" | "fish" | "dash")
+}
+
+/// Quotes `arg`, writing a home prefix as a bare `~` so the shell expands it.
+fn shell_word(arg: &str, home: &Path) -> String {
+    match Path::new(arg).strip_prefix(home) {
+        Ok(rest) if rest.as_os_str().is_empty() => "~".to_owned(),
+        Ok(rest) => format!("~/{}", quote(&rest.to_string_lossy())),
+        Err(_) => quote(arg).into_owned(),
+    }
 }
 
 fn quote(arg: &str) -> Cow<'_, str> {
