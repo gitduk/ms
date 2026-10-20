@@ -56,6 +56,11 @@ enum Cmd {
         #[arg(add = ArgValueCandidates::new(config_candidates))]
         name: String,
     },
+    /// Delete a config; its running session is left alone
+    Rm {
+        #[arg(add = ArgValueCandidates::new(config_candidates))]
+        name: String,
+    },
     /// Kill a config's session
     Kill {
         #[arg(add = ArgValueCandidates::new(config_candidates))]
@@ -105,6 +110,12 @@ fn main() -> Result<()> {
         Cmd::Ls => ls(),
         Cmd::Init { shell: Shell::Zsh } => init::zsh(),
         Cmd::Edit { name } => edit(&name),
+        Cmd::Rm { name } => {
+            let path = config::path_of(&name)?;
+            fs::remove_file(&path).with_context(|| format!("cannot remove {}", path.display()))?;
+            println!("removed {}", path.display());
+            Ok(())
+        }
         Cmd::Kill { name } => {
             let cfg = Config::load(&name)?;
             tmux::cmd()
