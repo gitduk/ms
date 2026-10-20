@@ -62,8 +62,12 @@ impl Config {
     pub fn load_path(path: &Path) -> Result<Self> {
         let text =
             fs::read_to_string(path).with_context(|| format!("cannot read {}", path.display()))?;
+        Self::parse(&text, path)
+    }
+
+    pub fn parse(text: &str, path: &Path) -> Result<Self> {
         let cfg: Self =
-            toml::from_str(&text).with_context(|| format!("invalid config {}", path.display()))?;
+            toml::from_str(text).with_context(|| format!("invalid config {}", path.display()))?;
         validate_session(&cfg.session)?;
         ensure!(
             !cfg.windows.is_empty(),

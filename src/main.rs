@@ -11,6 +11,7 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::{ArgValueCandidates, CompleteEnv, CompletionCandidate};
+use toml_edit::DocumentMut;
 
 use crate::config::Config;
 use crate::tmux::Run;
@@ -37,6 +38,16 @@ enum Cmd {
         /// Review in $EDITOR first; quitting without saving keeps the old config
         #[arg(short, long)]
         edit: bool,
+    },
+    /// Re-capture only the windows of an existing config; everything above
+    /// them (session, root, hooks, comments) stays as written
+    Update {
+        /// Config name [default: the captured session's name]
+        #[arg(add = ArgValueCandidates::new(config_candidates))]
+        name: Option<String>,
+        /// Session to capture [default: the config's session]
+        #[arg(short, long, add = ArgValueCandidates::new(session_candidates))]
+        session: Option<String>,
     },
     /// Start a session from its config (attach if already running)
     Start {
@@ -102,6 +113,7 @@ fn main() -> Result<()> {
             force,
             edit,
         } => save(name, session, force, edit),
+        Cmd::Update { name, session } => update(name, session),
         Cmd::Start {
             name,
             fresh,
@@ -173,6 +185,43 @@ fn save(name: Option<String>, session: Option<String>, force: bool, edit: bool) 
     fs::write(&path, text).with_context(|| format!("cannot write {}", path.display()))?;
     println!("saved {session:?} to {}", path.display());
     Ok(())
+}
+
+fn update(name: Option<String>, session: Option<String>) -> Result<()> {
+    let name = config_name(name, session.clone())?;
+    let path = config::path_of(&name)?;
+    let text =
+        fs::read_to_string(&path).with_context(|| format!("cannot read {}", path.display()))?;
+    let old = Config::parse(&text, &path)?;
+    let mut doc: DocumentMut = text.parse()?;
+    let session = session.unwrap_or_else(|| old.session.clone());
+    let mut cfg = capture::capture(&session, &old.session)?;
+    // The old session root stays, so a different captured one moves down
+    // to the windows that relied on it.
+    if cfg.root != old.root {
+        for w in &mut cfg.windows {
+            if w.root.is_none() && w.panes.iter().all(|p| p.root.is_none()) {
+                w.root = cfg.root.clone();
+            }
+        }
+    }
+    doc["windows"] = cfg
+        .to_doc()?
+        .remove("windows")
+        .context("no windows captured")?;
+    let text = doc.to_string();
+    toml::from_str::<Config>(&text).context("updated config doesn't parse")?;
+    fs::write(&path, text).with_context(|| format!("cannot write {}", path.display()))?;
+    println!("updated the windows of {} from {session:?}", path.display());
+    Ok(())
+}
+
+/// A config is named after its session unless named explicitly.
+fn config_name(name: Option<String>, session: Option<String>) -> Result<String> {
+    match name {
+        Some(n) => Ok(n),
+        None => target_session(session),
+    }
 }
 
 fn target_session(session: Option<String>) -> Result<String> {
