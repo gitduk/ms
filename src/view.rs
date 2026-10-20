@@ -1,3 +1,4 @@
+use std::io::IsTerminal;
 use std::path::Path;
 
 use anyhow::Result;
@@ -8,12 +9,18 @@ use crate::restore;
 pub fn print(cfg: &Config) -> Result<()> {
     let width = restore::terminal_size().map_or(80, |(cols, _)| usize::from(cols).max(20));
     let home = config::home()?;
+    let color = std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none();
+    let paint = |code: &str, text: &str| paint(color, code, text);
     for (i, w) in cfg.windows.iter().enumerate() {
         if i > 0 {
             println!();
         }
         let labels = labels(cfg, w, &home)?;
-        let head = format!("{} · {}", w.name, count(labels.len(), "pane"));
+        let head = format!(
+            "{} {}",
+            paint("1;36", &w.name),
+            paint("2", &format!("· {}", count(labels.len(), "pane")))
+        );
         let cells = match w.layout.as_deref() {
             None if labels.len() == 1 => Ok(vec![Cell {
                 x: 0,
@@ -31,14 +38,18 @@ pub fn print(cfg: &Config) -> Result<()> {
         match cells {
             Ok(cells) => {
                 println!("{head}");
-                for line in draw(&cells, &labels, width) {
+                for line in draw(&cells, &labels, width, color) {
                     println!("{line}");
                 }
             }
             Err(why) => {
                 println!("{head}  ({why})");
-                for (n, [cmd, root]) in labels.iter().enumerate() {
-                    println!("  {}. {cmd}  {root}", n + 1);
+                for (n, (cmd, root)) in labels.iter().enumerate() {
+                    let root = paint(ROOT, root);
+                    match cmd {
+                        Some(cmd) => println!("  {}. {root}  {}", n + 1, paint(CMD, cmd)),
+                        None => println!("  {}. {root}", n + 1),
+                    }
                 }
             }
         }
@@ -46,26 +57,39 @@ pub fn print(cfg: &Config) -> Result<()> {
     Ok(())
 }
 
+const ROOT: &str = "34";
+const CMD: &str = "32";
+
+fn paint(color: bool, code: &str, text: &str) -> String {
+    if color && !code.is_empty() {
+        format!("\x1b[{code}m{text}\x1b[0m")
+    } else {
+        text.to_owned()
+    }
+}
+
 pub fn count(n: usize, noun: &str) -> String {
     let s = if n == 1 { "" } else { "s" };
     format!("{n} {noun}{s}")
 }
 
-/// `[cmd, root]` per pane, the root fully resolved.
-fn labels(cfg: &Config, w: &Window, home: &Path) -> Result<Vec<[String; 2]>> {
-    let label = |p: Option<&Pane>| -> Result<[String; 2]> {
+/// `(cmd, root)` per pane, the root fully resolved; no cmd for a bare shell.
+fn labels(cfg: &Config, w: &Window, home: &Path) -> Result<Vec<Label>> {
+    let label = |p: Option<&Pane>| -> Result<Label> {
         let cmd = p
             .and_then(|p| p.cmd.as_deref())
             .filter(|c| !c.is_empty())
-            .unwrap_or("(shell)");
+            .map(str::to_owned);
         let root = config::tildify(&cfg.resolve_root(Some(w), p)?, home);
-        Ok([cmd.to_owned(), root.display().to_string()])
+        Ok((cmd, root.display().to_string()))
     };
     if w.panes.is_empty() {
         return Ok(vec![label(None)?]);
     }
     w.panes.iter().map(|p| label(Some(p))).collect()
 }
+
+type Label = (Option<String>, String);
 
 #[derive(Debug, PartialEq)]
 struct Cell {
@@ -150,7 +174,7 @@ const RIGHT: u8 = 8;
 
 /// Scales the layout to `width` columns, giving every pane room for at
 /// least one line of text.
-fn draw(cells: &[Cell], labels: &[[String; 2]], width: usize) -> Vec<String> {
+fn draw(cells: &[Cell], labels: &[Label], width: usize, color: bool) -> Vec<String> {
     // Edges in tmux columns: a pane's border sits one past its last cell.
     let xs = bounds(cells.iter().flat_map(|c| [c.x, c.x + c.w + 1]));
     let ys = bounds(cells.iter().flat_map(|c| [c.y, c.y + c.h + 1]));
@@ -180,22 +204,39 @@ fn draw(cells: &[Cell], labels: &[[String; 2]], width: usize) -> Vec<String> {
         boxes.push((x0, x1, y0, y1));
     }
 
-    let mut grid: Vec<Vec<char>> = links
+    let mut grid: Vec<Vec<(char, &str)>> = links
         .iter()
-        .map(|row| row.iter().map(|&l| junction(l)).collect())
+        .map(|row| row.iter().map(|&l| (junction(l), "")).collect())
         .collect();
     for (&(x0, x1, y0, y1), label) in boxes.iter().zip(labels) {
         let inner = x1 - x0 - 1;
         let pad = usize::from(inner >= 4);
-        for (row, text) in (y0 + 1..y1).zip(label) {
+        let (cmd, root) = label;
+        // A one-row pane keeps the cmd: it tells panes apart, the root rarely does.
+        let lines = match cmd {
+            Some(cmd) if y1 - y0 > 2 => vec![(root, ROOT), (cmd, CMD)],
+            Some(cmd) => vec![(cmd, CMD)],
+            None => vec![(root, ROOT)],
+        };
+        for (row, (text, code)) in (y0 + 1..y1).zip(lines) {
             let text = fit(text, inner - 2 * pad);
             for (x, ch) in (x0 + 1 + pad..).zip(text.chars()) {
-                grid[row][x] = ch;
+                grid[row][x] = (ch, code);
             }
         }
     }
-    grid.into_iter()
-        .map(|row| row.into_iter().collect())
+    grid.iter()
+        .map(|row| {
+            row.chunk_by(|a, b| a.1 == b.1)
+                .map(|run| {
+                    paint(
+                        color,
+                        run[0].1,
+                        &run.iter().map(|c| c.0).collect::<String>(),
+                    )
+                })
+                .collect()
+        })
         .collect()
 }
 
@@ -294,15 +335,15 @@ mod tests {
     fn draws_shared_borders_as_junctions() {
         let cells = parse_layout("8213,80x24,0,0{40x24,0,0,3,39x24,41,0,5}").unwrap();
         let labels = [
-            ["sleep 998".to_owned(), "/tmp".to_owned()],
-            ["(shell)".to_owned(), "~".to_owned()],
+            (Some("sleep 998".to_owned()), "/tmp".to_owned()),
+            (None, "~".to_owned()),
         ];
         assert_eq!(
-            draw(&cells, &labels, 30),
+            draw(&cells, &labels, 30, false),
             [
                 "┌──────────────┬─────────────┐",
-                "│ sleep 998    │ (shell)     │",
                 "│ /tmp         │ ~           │",
+                "│ sleep 998    │             │",
                 "│              │             │",
                 "└──────────────┴─────────────┘",
             ]
