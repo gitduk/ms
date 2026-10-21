@@ -26,29 +26,18 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Capture a running session into ~/.config/ms/<name>.toml
+    /// Capture a running session into ~/.config/ms/<session>.toml; an existing
+    /// config gets only its windows replaced, the rest stays as written
     Save {
-        /// Config name [default: the captured session's name]
-        name: Option<String>,
         /// Session to capture [default: the current one]
         #[arg(short, long, add = ArgValueCandidates::new(session_candidates))]
         session: Option<String>,
-        /// Overwrite an existing config
+        /// Rewrite an existing config whole instead of only its windows
         #[arg(short, long)]
         force: bool,
         /// Review in $EDITOR first; quitting without saving keeps the old config
         #[arg(short, long)]
         edit: bool,
-    },
-    /// Re-capture only the windows of an existing config; everything above
-    /// them (session, root, hooks, comments) stays as written
-    Update {
-        /// Config name [default: the captured session's name]
-        #[arg(add = ArgValueCandidates::new(config_candidates))]
-        name: Option<String>,
-        /// Session to capture [default: the config's session]
-        #[arg(short, long, add = ArgValueCandidates::new(session_candidates))]
-        session: Option<String>,
     },
     /// Start a session from its config (attach if already running)
     Start {
@@ -117,12 +106,10 @@ fn main() -> Result<()> {
         .complete();
     match Cli::parse().command {
         Cmd::Save {
-            name,
             session,
             force,
             edit,
-        } => save(name, session, force, edit),
-        Cmd::Update { name, session } => update(name, session),
+        } => save(session, force, edit),
         Cmd::Start {
             name,
             fresh,
@@ -148,17 +135,11 @@ fn main() -> Result<()> {
     }
 }
 
-fn save(name: Option<String>, session: Option<String>, force: bool, edit: bool) -> Result<()> {
-    let (name, session) = match name {
-        Some(n) => (n, session),
-        None => {
-            let s = target_session(session)?;
-            (s.clone(), Some(s))
-        }
-    };
-    let name = name.as_str();
-    let path = config::path_of(name)?;
+fn save(session: Option<String>, force: bool, edit: bool) -> Result<()> {
+    let session = target_session(session)?;
+    let name = session.as_str();
     config::validate_session(name)?;
+    let path = config::path_of(name)?;
     let dir = config::dir()?;
     let draft = dir.join(format!(".{name}.save.toml"));
     if edit && draft.exists() {
@@ -168,44 +149,35 @@ fn save(name: Option<String>, session: Option<String>, force: bool, edit: bool) 
         );
         return review(&path, &draft, true);
     }
-    if path.exists() && !force && !edit {
-        bail!(
-            "{} exists (it may hold hand edits); pass --force to overwrite, or -e to review first",
-            path.display()
-        );
-    }
-    let session = target_session(session)?;
-    let mut cfg = capture::capture(&session, name)?;
-    // Hooks can't be captured from tmux; keep the ones already written.
-    if path.exists() {
-        match Config::load_path(&path) {
-            Ok(old) => {
-                cfg.before = old.before;
-                cfg.after = old.after;
-            }
-            Err(e) => eprintln!("warning: hooks not kept, old config unreadable: {e:#}"),
-        }
-    }
+    let cfg = capture::capture(&session, name)?;
+    let exists = path.exists();
+    let text = if exists && !force {
+        replace_windows(&path, cfg)?
+    } else {
+        whole(&path, cfg)?
+    };
     fs::create_dir_all(&dir).with_context(|| format!("cannot create {}", dir.display()))?;
-    let text = cfg.to_toml()?;
     if edit {
         fs::write(&draft, text).with_context(|| format!("cannot write {}", draft.display()))?;
         return review(&path, &draft, false);
     }
     fs::write(&path, text).with_context(|| format!("cannot write {}", path.display()))?;
-    println!("saved {session:?} to {}", path.display());
+    if exists && !force {
+        println!("updated the windows of {} from {session:?}", path.display());
+    } else {
+        println!("saved {session:?} to {}", path.display());
+    }
     Ok(())
 }
 
-fn update(name: Option<String>, session: Option<String>) -> Result<()> {
-    let name = config_name(name, session.clone())?;
-    let path = config::path_of(&name)?;
+/// The existing config at `path` with its windows swapped for `cfg`'s;
+/// session, root, hooks and comments stay as written.
+fn replace_windows(path: &Path, mut cfg: Config) -> Result<String> {
     let text =
-        fs::read_to_string(&path).with_context(|| format!("cannot read {}", path.display()))?;
-    let old = Config::parse(&text, &path)?;
+        fs::read_to_string(path).with_context(|| format!("cannot read {}", path.display()))?;
+    let old = Config::parse(&text, path)
+        .context("can't update its windows; pass --force to rewrite it whole")?;
     let mut doc: DocumentMut = text.parse()?;
-    let session = session.unwrap_or_else(|| old.session.clone());
-    let mut cfg = capture::capture(&session, &old.session)?;
     // The old session root stays, so a different captured one moves down
     // to the windows that relied on it.
     if cfg.root != old.root {
@@ -221,9 +193,22 @@ fn update(name: Option<String>, session: Option<String>) -> Result<()> {
         .context("no windows captured")?;
     let text = doc.to_string();
     toml::from_str::<Config>(&text).context("updated config doesn't parse")?;
-    fs::write(&path, text).with_context(|| format!("cannot write {}", path.display()))?;
-    println!("updated the windows of {} from {session:?}", path.display());
-    Ok(())
+    Ok(text)
+}
+
+/// `cfg` as a whole config, keeping the hooks of any old one at `path`.
+fn whole(path: &Path, mut cfg: Config) -> Result<String> {
+    // Hooks can't be captured from tmux; keep the ones already written.
+    if path.exists() {
+        match Config::load_path(path) {
+            Ok(old) => {
+                cfg.before = old.before;
+                cfg.after = old.after;
+            }
+            Err(e) => eprintln!("warning: hooks not kept, old config unreadable: {e:#}"),
+        }
+    }
+    cfg.to_toml()
 }
 
 /// A config is named after its session unless named explicitly.

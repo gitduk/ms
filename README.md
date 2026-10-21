@@ -25,32 +25,29 @@ eval "$(ms init zsh)"
 
 ```sh
 ms save              # capture the current session into <session>.toml
-ms save work -e      # capture into work.toml, reviewing it in $EDITOR first
-ms save work -s dev  # capture the running session dev into work.toml
+ms save -s work      # capture the running session work into work.toml
+ms save -e           # the same as `ms save`, reviewing it in $EDITOR first
+ms save -f           # rewrite the config whole instead of only its windows
 ms ls                # list configs with window/pane counts; * marks running
 ms view work         # draw work's windows as their pane layouts
 ms start work        # build the session (or attach if it's running)
 ms start work -d     # build it without attaching
 ms start work --fresh  # kill and rebuild it
-ms update work       # re-capture only the windows, keeping everything else
 ms edit work         # open work.toml in $EDITOR (a new name starts a new config)
 ms kill work         # kill the session; the config stays
 ms rm work           # delete the config; the session stays
 ```
 
-Inside tmux, `NAME` defaults to the current session's name for `save`,
-`update`, `start`, `view` and `edit`. `rm` and `kill` always need it.
-`save` and `update` take `-s SESSION` to capture a session other than the
-current one (`update` defaults to the config's own `session`).
+A config is always named after its session. `save` captures the current
+session, or `-s SESSION`. Inside tmux, `NAME` defaults to the current
+session's name for `start`, `view` and `edit`; `rm` and `kill` always need it.
 
-`save` refuses to overwrite an existing config, since it may hold hand edits:
-pass `--force`, or `-e` to review the new capture first. With `-e`, the config
-is replaced only if you save in the editor and the result parses; otherwise
-the capture is kept as a draft that the next `save -e` resumes. Hooks can't
-be captured from tmux, so `save` keeps the old config's `before` and `after`.
-
-`update` rewrites only `[[windows]]`; `session`, `root`, hooks and comments
-stay as written. `start --fresh` refuses to run from inside the session it
+On an existing config, `save` rewrites only `[[windows]]`; `session`, `root`,
+hooks and comments stay as written. `--force` rewrites the whole config
+instead, still keeping `before` and `after`, which tmux can't capture. With
+`-e`, the config is replaced only if you save in the editor and the result
+parses; otherwise the capture is kept as a draft that the next `save -e`
+resumes. `start --fresh` refuses to run from inside the session it
 would kill. `ls` marks a config that fails to parse with `!` and its error.
 
 ## Config
