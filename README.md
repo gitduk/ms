@@ -26,6 +26,7 @@ eval "$(ms init zsh)"
 ```sh
 ms save              # capture the current session into <session>.toml
 ms save -s work      # capture the running session work into work.toml
+ms save -a           # capture every running session
 ms save -e           # the same as `ms save`, reviewing it in $EDITOR first
 ms save -f           # rewrite the config whole instead of only its windows
 ms ls                # list configs with window/pane counts; * marks running
@@ -39,8 +40,10 @@ ms rm work           # delete the config; the session stays
 ```
 
 A config is always named after its session. `save` captures the current
-session, or `-s SESSION`. Inside tmux, `NAME` defaults to the current
-session's name for `start`, `view` and `edit`; `rm` and `kill` always need it.
+session, `-s SESSION`, or `-a` for every running session; one failing
+session doesn't stop the rest, and the exit status is non-zero if any did.
+Inside tmux, `NAME` defaults to the current session's name for `start`,
+`view` and `edit`; `rm` and `kill` always need it.
 
 On an existing config, `save` rewrites only `[[windows]]`; `session`, `root`,
 hooks and comments stay as written. `--force` rewrites the whole config

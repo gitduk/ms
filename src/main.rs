@@ -9,7 +9,7 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::{ArgValueCandidates, CompleteEnv, CompletionCandidate};
 use toml_edit::DocumentMut;
@@ -32,6 +32,9 @@ enum Cmd {
         /// Session to capture [default: the current one]
         #[arg(short, long, add = ArgValueCandidates::new(session_candidates))]
         session: Option<String>,
+        /// Capture every running session
+        #[arg(short, long, conflicts_with = "session")]
+        all: bool,
         /// Rewrite an existing config whole instead of only its windows
         #[arg(short, long)]
         force: bool,
@@ -107,18 +110,19 @@ fn main() -> Result<()> {
     match Cli::parse().command {
         Cmd::Save {
             session,
+            all,
             force,
             edit,
-        } => save(session, force, edit),
+        } => save(session, all, force, edit),
         Cmd::Start {
             name,
             fresh,
             detached,
-        } => restore::start(&Config::load(&config_name(name, None)?)?, fresh, detached),
+        } => restore::start(&Config::load(&config_name(name)?)?, fresh, detached),
         Cmd::Ls => ls(),
-        Cmd::View { name } => view::print(&Config::load(&config_name(name, None)?)?),
+        Cmd::View { name } => view::print(&Config::load(&config_name(name)?)?),
         Cmd::Init { shell: Shell::Zsh } => init::zsh(),
-        Cmd::Edit { name } => edit(&config_name(name, None)?),
+        Cmd::Edit { name } => edit(&config_name(name)?),
         Cmd::Rm { name } => {
             let path = config::path_of(&name)?;
             fs::remove_file(&path).with_context(|| format!("cannot remove {}", path.display()))?;
@@ -135,13 +139,38 @@ fn main() -> Result<()> {
     }
 }
 
-fn save(session: Option<String>, force: bool, edit: bool) -> Result<()> {
-    let session = target_session(session)?;
-    let name = session.as_str();
-    config::validate_session(name)?;
-    let path = config::path_of(name)?;
+fn save(session: Option<String>, all: bool, force: bool, edit: bool) -> Result<()> {
+    match session {
+        Some(s) => save_one(&s, force, edit),
+        None if all => save_all(force, edit),
+        None => save_one(&config_name(None)?, force, edit),
+    }
+}
+
+/// Every running session; one failing doesn't abandon the rest.
+fn save_all(force: bool, edit: bool) -> Result<()> {
+    let sessions = tmux::running_sessions();
+    ensure!(!sessions.is_empty(), "no sessions running to save");
+    let mut failed = 0;
+    for session in &sessions {
+        if let Err(e) = save_one(session, force, edit) {
+            eprintln!("{session}: {e:#}");
+            failed += 1;
+        }
+    }
+    ensure!(
+        failed == 0,
+        "{failed} of {} sessions not saved",
+        sessions.len()
+    );
+    Ok(())
+}
+
+fn save_one(session: &str, force: bool, edit: bool) -> Result<()> {
+    config::validate_session(session)?;
+    let path = config::path_of(session)?;
     let dir = config::dir()?;
-    let draft = dir.join(format!(".{name}.save.toml"));
+    let draft = dir.join(format!(".{session}.save.toml"));
     if edit && draft.exists() {
         println!(
             "resuming the draft from an earlier save (delete it for a fresh capture): {}",
@@ -149,7 +178,7 @@ fn save(session: Option<String>, force: bool, edit: bool) -> Result<()> {
         );
         return review(&path, &draft, true);
     }
-    let cfg = capture::capture(&session, name)?;
+    let cfg = capture::capture(session)?;
     let exists = path.exists();
     let text = if exists && !force {
         replace_windows(&path, cfg)?
@@ -211,17 +240,11 @@ fn whole(path: &Path, mut cfg: Config) -> Result<String> {
     cfg.to_toml()
 }
 
-/// A config is named after its session unless named explicitly.
-fn config_name(name: Option<String>, session: Option<String>) -> Result<String> {
+/// A config is named after its session unless named explicitly;
+/// a bare call takes the current session's name.
+fn config_name(name: Option<String>) -> Result<String> {
     match name {
         Some(n) => Ok(n),
-        None => target_session(session),
-    }
-}
-
-fn target_session(session: Option<String>) -> Result<String> {
-    match session {
-        Some(s) => Ok(s),
         None if tmux::inside() => tmux::current_session(),
         None => bail!("not inside tmux; name the config or session explicitly"),
     }

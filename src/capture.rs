@@ -11,7 +11,7 @@ use crate::tmux::{self, Run};
 // Free-text fields go through `tmux::raw`, which encodes `|` away.
 const SEP: &str = "|";
 
-pub fn capture(session: &str, name: &str) -> Result<Config> {
+pub fn capture(session: &str) -> Result<Config> {
     let format = [
         "#{window_index}".into(),
         tmux::raw("window_name"),
@@ -79,7 +79,7 @@ pub fn capture(session: &str, name: &str) -> Result<Config> {
     let root = hoist(windows.iter_mut().map(|w| &mut w.root));
 
     Ok(Config {
-        session: name.to_owned(),
+        session: session.to_owned(),
         root,
         before: None,
         after: None,
